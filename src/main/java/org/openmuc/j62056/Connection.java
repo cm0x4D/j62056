@@ -20,13 +20,6 @@
  */
 package org.openmuc.j62056;
 
-import gnu.io.CommPort;
-import gnu.io.CommPortIdentifier;
-import gnu.io.NoSuchPortException;
-import gnu.io.PortInUseException;
-import gnu.io.SerialPort;
-import gnu.io.UnsupportedCommOperationException;
-
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
@@ -35,25 +28,34 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeoutException;
 
+import javax.comm.CommPort;
+import javax.comm.CommPortIdentifier;
+import javax.comm.NoSuchPortException;
+import javax.comm.PortInUseException;
+import javax.comm.SerialPort;
+import javax.comm.UnsupportedCommOperationException;
+
 public class Connection {
 
 	private final String serialPortName;
 	private SerialPort serialPort;
 
 	private final boolean handleEcho;
+	private final boolean changeBaudRate;
 	private final int baudRateChangeDelay;
 	private int timeout = 5000;
 
 	private DataOutputStream os;
 	private DataInputStream is;
 
-	private static final byte[] REQUEST_MESSAGE = new byte[] { (byte) 0x2F, (byte) 0x3F, (byte) 0x21, (byte) 0x0D,
-			(byte) 0x0A };
+	private static final byte[] REQUEST_MESSAGE = new byte[] {'/','?', '!', 0x0D, 0x0A};
+	private static final byte[] REQUEST_MESSAGE_HEADER = new byte[] { (byte) '/', (byte) '?',};
+	private static final byte[] REQUEST_MESSAGE_FOOTER = new byte[] { (byte) '!', (byte) 0x0D, (byte) 0x0A };
 
 	private static final byte[] ACKNOWLEDGE = new byte[] { (byte) 0x06, (byte) 0x30, (byte) 0x30, (byte) 0x30,
 			(byte) 0x0D, (byte) 0x0A };
 
-	private static final int INPUT_BUFFER_LENGTH = 1024;
+	private static final int INPUT_BUFFER_LENGTH = 16384;	// TODO: Dirty fix, we should use buffers which can grow...
 	private final byte[] buffer = new byte[INPUT_BUFFER_LENGTH];
 
 	private static final Charset charset = Charset.forName("US-ASCII");
@@ -75,14 +77,34 @@ public class Connection {
 	 *            used, you might have to use a delay of around 250ms because otherwise the baud rate is changed before
 	 *            the previous message (i.e. the acknowledgment) has been completely sent.
 	 */
-	public Connection(String serialPort, boolean handleEcho, int baudRateChangeDelay) {
+	public Connection(String serialPort, boolean handleEcho, boolean changeBaudRate, int baudRateChangeDelay) {
 		if (serialPort == null) {
 			throw new IllegalArgumentException("serialPort may not be NULL");
 		}
 
 		serialPortName = serialPort;
 		this.handleEcho = handleEcho;
+		this.changeBaudRate = changeBaudRate;
 		this.baudRateChangeDelay = baudRateChangeDelay;
+	}
+	
+	/**
+	 * Creates a Connection object. You must call <code>open()</code> before calling <code>read()</code> in order to
+	 * read data. The timeout is set by default to 5s.
+	 * 
+	 * @param serialPort
+	 *            examples for serial port identifiers are on Linux "/dev/ttyS0" or "/dev/ttyUSB0" and on Windows "COM1"
+	 * @param handleEcho
+	 *            tells the connection to throw away echos of outgoing messages. Echos are caused by some optical
+	 *            transceivers.
+	 * @param baudRateChangeDelay
+	 *            tells the connection the time in ms to wait before changing the baud rate during message exchange.
+	 *            This parameter can usually be set to zero for regular serial ports. If a USB to serial converter is
+	 *            used, you might have to use a delay of around 250ms because otherwise the baud rate is changed before
+	 *            the previous message (i.e. the acknowledgment) has been completely sent.
+	 */
+	public Connection(String serialPort, boolean handleEcho, int baudRateChangeDelay) {
+		this(serialPort, handleEcho, true, baudRateChangeDelay);
 	}
 
 	/**
@@ -183,6 +205,23 @@ public class Connection {
 	 *             if no response at all (not even a single byte) was received from the meter within the timeout span.
 	 */
 	public List<DataSet> read() throws IOException, TimeoutException {
+		return read(null);
+	}
+	
+	/**
+	 * Requests a data message from the remote device using IEC 62056-21 Mode C. The data message received is parsed and
+	 * a list of data sets is returned. The meter ID is used in order to address the meter to readout.
+	 * 
+	 * @param  meterId Id of the meter to read, null if you do not want to send the meter ID. 
+	 * @return A list of data sets contained in the data message response from the remote device. The first data set
+	 *         will contain the "identification" of the meter as the id and empty strings for value and unit.
+	 * @throws IOException
+	 *             if any kind of error other than timeout occurs while trying to read the remote device. Note that the
+	 *             connection is not closed when an IOException is thrown.
+	 * @throws TimeoutException
+	 *             if no response at all (not even a single byte) was received from the meter within the timeout span.
+	 */
+	public List<DataSet> read(String meterId) throws IOException, TimeoutException {
 
 		if (serialPort == null) {
 			throw new IllegalStateException("Connection is not open.");
@@ -194,7 +233,16 @@ public class Connection {
 			throw new IOException("Unable to set the given serial comm parameters", e);
 		}
 
-		os.write(REQUEST_MESSAGE);
+		if (meterId != null && meterId.length() < 32) {
+			byte[] data = new byte[5 + meterId.length()];
+			System.arraycopy(REQUEST_MESSAGE_HEADER, 0, data, 0, 2);
+			System.arraycopy(meterId.getBytes(), 0, data, 2, meterId.length());
+			System.arraycopy(REQUEST_MESSAGE_FOOTER, 0, data, meterId.length() + 2, 3);
+			os.write(data);
+		} else {
+			os.write(REQUEST_MESSAGE);
+		}
+		
 		os.flush();
 		int baudRateSetting;
 		int baudRate;
@@ -301,11 +349,13 @@ public class Connection {
 			}
 		}
 
-		try {
-			serialPort.setSerialPortParams(baudRate, SerialPort.DATABITS_7, SerialPort.STOPBITS_1,
-					SerialPort.PARITY_EVEN);
-		} catch (UnsupportedCommOperationException e) {
-			throw new IOException("Serial Port does not support " + baudRate + "bd 8N1");
+		if (changeBaudRate) {
+			try {
+				serialPort.setSerialPortParams(baudRate, SerialPort.DATABITS_7, SerialPort.STOPBITS_1,
+						SerialPort.PARITY_EVEN);
+			} catch (UnsupportedCommOperationException e) {
+				throw new IOException("Serial Port does not support " + baudRate + "bd 8N1");
+			}
 		}
 
 		readSuccessful = false;
@@ -339,6 +389,8 @@ public class Connection {
 			throw new IOException("Timeout while listening for Data Message");
 		}
 
+		System.out.println(numBytesReadTotal);
+		
 		// System.out.println("Got the following data message: " + getByteArrayString(buffer, numBytesReadTotal));
 
 		int index;

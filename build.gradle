@@ -15,7 +15,7 @@ repositories { mavenCentral() }
 
 dependencies {
   testCompile group: 'junit', name: 'junit', version: '4.11'
-  compile files('dependencies/rxtxcomm_api-2.2pre2-11_bundle.jar')
+  compile files('dependencies/javax.comm_2.2.0.jar')
 }
 
 uploadArchives {
