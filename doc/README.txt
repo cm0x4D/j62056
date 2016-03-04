@@ -1,5 +1,6 @@
 /*
  * Copyright 2013-14 Fraunhofer ISE
+ * with contributions of the Institute of Systems Engineering, HES-SO Valais
  *
  * This file is part of j62056.
  * For more information visit http://www.openmuc.org
@@ -20,6 +21,7 @@
  */
 
 Author: Stefan Feuerhahn
+Contributor: Michael Clausen
 
 j62056 is a Java library implementing an IEC 62056-21 mode C
 master.  It can be used to read metering data from slaves such as gas,

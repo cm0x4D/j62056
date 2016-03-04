@@ -1,3 +1,8 @@
+v1.3 4-March-2016
+-----------------
+- Fixed some small bugs
+- Changed dependency to javax.comm interface to enable usage with another Serial libraries than RXTX.
+
 v1.2 10-Jan-2014
 ----------------
 - read now throws TimeoutException so it can be distinguished from
